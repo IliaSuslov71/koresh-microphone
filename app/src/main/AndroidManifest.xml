@@ -2,20 +2,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <uses-permission
-        android:name="android.permission.RECORD_AUDIO" />
-
-    <uses-feature
-        android:name="android.hardware.microphone"
-        android:required="true" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <application
-        android:label="Кореш Микрофон"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar"
-        android:usesCleartextTraffic="false">
+        android:label="Koresh Microphone"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
         <activity
-            android:name=".MainActivity"
+            android:name="com.koresh.microphone.MainActivity"
             android:exported="true">
 
             <intent-filter>
@@ -24,6 +18,7 @@
             </intent-filter>
 
         </activity>
+
     </application>
 
 </manifest>
