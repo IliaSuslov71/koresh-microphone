@@ -9,28 +9,33 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Get sources
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Java 17
+      - name: Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
+      - name: Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android tools
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Install Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
 
       - name: Build APK
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+        run: gradle assembleDebug --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Koresh-Microphone
           path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
