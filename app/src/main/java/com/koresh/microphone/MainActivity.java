@@ -9,6 +9,9 @@ import android.media.AudioRecord;
 import android.media.MediaRecorder;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.Gravity;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -16,188 +19,174 @@ import android.widget.TextView;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.RandomAccessFile;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 
 public class MainActivity extends Activity {
 
-    private static final int RATE = 16000;
-    private static final int PERMISSION_REQUEST = 1;
-
-    private AudioRecord recorder;
-    private Thread recordingThread;
-
-    private volatile boolean recording = false;
-    private volatile boolean stopping = false;
+    private static final int SAMPLE_RATE = 16000;
+    private static final String SERVER_URL =
+            "http://127.0.0.1:8765/audio";
 
     private TextView status;
     private Button button;
+    private AudioRecord recorder;
+    private Thread recordingThread;
+    private volatile boolean recording = false;
+    private volatile boolean stopping = false;
+    private File wavFile;
+
+    private final Handler mainHandler =
+            new Handler(Looper.getMainLooper());
 
     @Override
-    public void onCreate(Bundle state) {
+    protected void onCreate(Bundle state) {
         super.onCreate(state);
 
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(40, 80, 40, 40);
+        layout.setGravity(Gravity.CENTER);
+        layout.setPadding(32, 32, 32, 32);
 
         status = new TextView(this);
-        status.setText("Кореш готов к записи");
+        status.setText("Кореш готов слушать");
         status.setTextSize(20);
+        status.setGravity(Gravity.CENTER);
 
         button = new Button(this);
         button.setText("Начать запись");
 
         layout.addView(status);
         layout.addView(button);
+
         setContentView(layout);
 
         button.setOnClickListener(v -> {
-            if (stopping) {
-                return;
-            }
+            if (stopping) return;
 
             if (recording) {
                 stopRecording();
-                return;
+            } else {
+                startRecording();
             }
-
-            if (checkSelfPermission(
-                    Manifest.permission.RECORD_AUDIO)
-                    != PackageManager.PERMISSION_GRANTED) {
-
-                requestPermissions(
-                    new String[]{
-                        Manifest.permission.RECORD_AUDIO
-                    },
-                    PERMISSION_REQUEST
-                );
-                return;
-            }
-
-            startRecording();
         });
+
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(
+                    new String[]{Manifest.permission.RECORD_AUDIO},
+                    100
+            );
+        }
+    }
+
+    private void showStatus(String message) {
+        mainHandler.post(() -> status.setText(message));
     }
 
     private void startRecording() {
-        if (recording || stopping) {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(
+                    new String[]{Manifest.permission.RECORD_AUDIO},
+                    100
+            );
             return;
         }
 
         int minBuffer = AudioRecord.getMinBufferSize(
-            RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
         );
 
         if (minBuffer <= 0) {
-            status.setText("Формат микрофона не поддерживается");
+            showStatus("Ошибка параметров микрофона");
             return;
         }
 
-        File directory = getExternalFilesDir(
-            Environment.DIRECTORY_MUSIC
-        );
+        int bufferSize = Math.max(minBuffer * 2, 4096);
 
-        if (directory == null) {
-            status.setText("Папка записи недоступна");
-            return;
-        }
-
-        File output = new File(directory, "koresh.wav");
-
-        try {
-            recorder = new AudioRecord(
+        recorder = new AudioRecord(
                 MediaRecorder.AudioSource.MIC,
-                RATE,
+                SAMPLE_RATE,
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT,
-                Math.max(minBuffer * 2, 4096)
-            );
+                bufferSize
+        );
 
-            if (recorder.getState()
-                    != AudioRecord.STATE_INITIALIZED) {
-                throw new IllegalStateException(
-                    "Не удалось инициализировать микрофон"
-                );
-            }
+        if (recorder.getState() != AudioRecord.STATE_INITIALIZED) {
+            recorder.release();
+            recorder = null;
+            showStatus("Не удалось открыть микрофон");
+            return;
+        }
 
+        File directory =
+                getExternalFilesDir(Environment.DIRECTORY_MUSIC);
+
+        if (directory == null) {
+            recorder.release();
+            recorder = null;
+            showStatus("Нет доступа к папке записи");
+            return;
+        }
+
+        wavFile = new File(directory, "koresh.wav");
+
+        try {
             recorder.startRecording();
-
-            if (recorder.getRecordingState()
-                    != AudioRecord.RECORDSTATE_RECORDING) {
-                throw new IllegalStateException(
-                    "Микрофон не начал запись"
-                );
-            }
-
         } catch (Exception e) {
-            if (recorder != null) {
-                recorder.release();
-                recorder = null;
-            }
-
-            status.setText("Ошибка: " + e.getMessage());
+            recorder.release();
+            recorder = null;
+            showStatus("Ошибка запуска: " + e.getMessage());
             return;
         }
 
         recording = true;
         button.setText("Остановить запись");
-        status.setText("Записываю голос...");
-
-        final AudioRecord activeRecorder = recorder;
+        showStatus("Слушаю тебя...");
 
         recordingThread = new Thread(() -> {
+            long dataSize = 0;
             byte[] buffer = new byte[4096];
-            long totalBytes = 0;
-            String error = null;
 
             try (FileOutputStream out =
-                     new FileOutputStream(output)) {
+                         new FileOutputStream(wavFile)) {
 
                 out.write(new byte[44]);
 
                 while (recording) {
-                    int count = activeRecorder.read(
-                        buffer,
-                        0,
-                        buffer.length
+                    int count = recorder.read(
+                            buffer, 0, buffer.length
                     );
 
                     if (count > 0) {
                         out.write(buffer, 0, count);
-                        totalBytes += count;
-                    } else if (count < 0) {
+                        dataSize += count;
+                    } else if (count < 0 && recording) {
                         throw new Exception(
-                            "Ошибка чтения аудио: " + count
+                                "Ошибка чтения аудио: " + count
                         );
                     }
                 }
 
             } catch (Exception e) {
-                error = e.getMessage();
+                showStatus("Ошибка записи: " + e.getMessage());
+                return;
             }
 
-            if (error == null) {
-                try {
-                    writeWavHeader(output, totalBytes);
-                } catch (Exception e) {
-                    error = e.getMessage();
-                }
+            try {
+                writeWavHeader(wavFile, dataSize);
+                showStatus("Запись готова. Отправляю...");
+
+                sendToTermux(wavFile);
+
+            } catch (Exception e) {
+                showStatus("Ошибка: " + e.getMessage());
             }
-
-            final String finalError = error;
-
-            runOnUiThread(() -> {
-                if (finalError == null) {
-                    status.setText(
-                        "Запись сохранена:\n"
-                        + output.getAbsolutePath()
-                    );
-                } else {
-                    status.setText(
-                        "Ошибка записи: " + finalError
-                    );
-                }
-            });
 
         }, "KoreshRecorder");
 
@@ -205,126 +194,125 @@ public class MainActivity extends Activity {
     }
 
     private void stopRecording() {
-        if (!recording || stopping) {
-            return;
-        }
+        if (!recording || stopping) return;
 
         stopping = true;
         recording = false;
-
         button.setEnabled(false);
-        status.setText("Сохраняю запись...");
-
-        final AudioRecord activeRecorder = recorder;
-        final Thread activeThread = recordingThread;
 
         new Thread(() -> {
             try {
-                if (activeRecorder != null
-                        && activeRecorder.getRecordingState()
-                        == AudioRecord.RECORDSTATE_RECORDING) {
-                    activeRecorder.stop();
-                }
-
-                if (activeThread != null) {
-                    activeThread.join();
-                }
-
-            } catch (Exception e) {
-                runOnUiThread(() ->
-                    status.setText(
-                        "Ошибка остановки: " + e.getMessage()
-                    )
-                );
-
-            } finally {
-                if (activeRecorder != null) {
-                    activeRecorder.release();
-                }
-
-                recorder = null;
-                recordingThread = null;
-                stopping = false;
-
-                runOnUiThread(() -> {
-                    button.setText("Начать запись");
-                    button.setEnabled(true);
-                });
+                recorder.stop();
+            } catch (Exception ignored) {
             }
+
+            try {
+                if (recordingThread != null) {
+                    recordingThread.join();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+
+            recorder.release();
+            recorder = null;
+
+            mainHandler.post(() -> {
+                stopping = false;
+                button.setEnabled(true);
+                button.setText("Начать запись");
+            });
+
         }, "KoreshStopper").start();
     }
 
-    private void writeWavHeader(
-            File file,
-            long dataSize) throws Exception {
+    private void sendToTermux(File file) {
+        HttpURLConnection connection = null;
+
+        try {
+            URL url = new URL(SERVER_URL);
+
+            connection =
+                    (HttpURLConnection) url.openConnection();
+
+            connection.setRequestMethod("POST");
+            connection.setConnectTimeout(5000);
+            connection.setReadTimeout(10000);
+            connection.setDoOutput(true);
+            connection.setRequestProperty(
+                    "Content-Type", "audio/wav"
+            );
+
+            try (InputStream input =
+                         new java.io.FileInputStream(file);
+                 OutputStream output =
+                         connection.getOutputStream()) {
+
+                byte[] buffer = new byte[8192];
+                int count;
+
+                while ((count = input.read(buffer)) != -1) {
+                    output.write(buffer, 0, count);
+                }
+            }
+
+            int response = connection.getResponseCode();
+
+            if (response == 200) {
+                showStatus("Готово! WAV получен Termux ✓");
+            } else {
+                showStatus(
+                        "Ошибка сервера: HTTP " + response
+                );
+            }
+
+        } catch (Exception e) {
+            showStatus(
+                    "Не удалось отправить: " + e.getMessage()
+            );
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    private void writeWavHeader(File file, long dataSize)
+            throws Exception {
 
         try (RandomAccessFile raf =
-                 new RandomAccessFile(file, "rw")) {
+                     new RandomAccessFile(file, "rw")) {
 
             raf.seek(0);
 
             raf.writeBytes("RIFF");
-            writeInt(raf, (int) (dataSize + 36));
-
+            writeIntLE(raf, (int) (36 + dataSize));
             raf.writeBytes("WAVE");
             raf.writeBytes("fmt ");
-
-            writeInt(raf, 16);
-            writeShort(raf, 1);
-            writeShort(raf, 1);
-
-            writeInt(raf, RATE);
-            writeInt(raf, RATE * 2);
-
-            writeShort(raf, 2);
-            writeShort(raf, 16);
-
+            writeIntLE(raf, 16);
+            writeShortLE(raf, 1);
+            writeShortLE(raf, 1);
+            writeIntLE(raf, SAMPLE_RATE);
+            writeIntLE(raf, SAMPLE_RATE * 2);
+            writeShortLE(raf, 2);
+            writeShortLE(raf, 16);
             raf.writeBytes("data");
-            writeInt(raf, (int) dataSize);
+            writeIntLE(raf, (int) dataSize);
         }
     }
 
-    private void writeInt(
-            RandomAccessFile file,
-            int value) throws Exception {
-
-        file.writeInt(
-            Integer.reverseBytes(value)
-        );
+    private void writeIntLE(RandomAccessFile raf, int value)
+            throws Exception {
+        raf.write(value & 0xff);
+        raf.write((value >> 8) & 0xff);
+        raf.write((value >> 16) & 0xff);
+        raf.write((value >> 24) & 0xff);
     }
 
-    private void writeShort(
-            RandomAccessFile file,
-            int value) throws Exception {
-
-        file.writeShort(
-            Short.reverseBytes((short) value)
-        );
-    }
-
-    @Override
-    public void onRequestPermissionsResult(
-            int requestCode,
-            String[] permissions,
-            int[] results) {
-
-        super.onRequestPermissionsResult(
-            requestCode,
-            permissions,
-            results
-        );
-
-        if (requestCode == PERMISSION_REQUEST) {
-            if (results.length > 0
-                    && results[0]
-                    == PackageManager.PERMISSION_GRANTED) {
-                startRecording();
-            } else {
-                status.setText(
-                    "Разреши доступ к микрофону"
-                );
-            }
-        }
+    private void writeShortLE(RandomAccessFile raf, int value)
+            throws Exception {
+        raf.write(value & 0xff);
+        raf.write((value >> 8) & 0xff);
     }
 
     @Override
@@ -332,7 +320,6 @@ public class MainActivity extends Activity {
         if (recording) {
             stopRecording();
         }
-
         super.onDestroy();
     }
 }
