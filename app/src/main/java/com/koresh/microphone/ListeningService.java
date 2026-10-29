@@ -21,6 +21,7 @@ public class ListeningService extends Service {
     private Thread worker;
     private AudioRecord mic;
     private Model model;
+    private SherpaBridge sherpa;
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     @Override public void onCreate() {
@@ -96,6 +97,8 @@ public class ListeningService extends Service {
     private void listen() {
         try {
             model = new Model(unpackModel().getAbsolutePath());
+            status("Загружаю sherpa-onnx...");
+            sherpa = new SherpaBridge(getAssets());
             int size = Math.max(AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT) * 2, 4096);
             mic = new AudioRecord(MediaRecorder.AudioSource.MIC, RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, size);
             if (mic.getState() != AudioRecord.STATE_INITIALIZED) throw new IOException("Не удалось открыть микрофон");
@@ -137,11 +140,15 @@ public class ListeningService extends Service {
                         if (!heardSpeech && now - start > 5500) break;
                     }
                     if (pcm.size() > 3200 && heardSpeech) {
-                        status("Отправляю вопрос в Termux...");
+                        status("Распознаю речь локально...");
                         try {
-                            sendWav(pcm.toByteArray());
-                            status("Отправлено. Жду «Бро»...");
-                        } catch (Exception ex) { status("Ошибка связи с Termux: " + ex.getMessage()); }
+                            String text = sherpa.recognize(pcm.toByteArray());
+                            if (text.isEmpty()) status("Не распознал вопрос. Жду «Бро»...");
+                            else {
+                                sendText(text);
+                                status("Отправлено: " + text);
+                            }
+                        } catch (Exception ex) { status("Ошибка распознавания/связи: " + ex.getMessage()); }
                     } else status("Не услышал вопрос. Жду «Бро»...");
                     recognizer.reset();
                     lastPartial = "";
@@ -158,8 +165,24 @@ public class ListeningService extends Service {
                 mic.release(); mic = null;
             }
             if (model != null) { model.close(); model = null; }
+            if (sherpa != null) { sherpa.close(); sherpa = null; }
             stopSelf();
         }
+    }
+    private void sendText(String text) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) new URL("http://127.0.0.1:8765/text").openConnection();
+        try {
+            conn.setRequestMethod("POST");
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(10000);
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            JSONObject json = new JSONObject();
+            json.put("text", text);
+            byte[] body = json.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            try (OutputStream out = conn.getOutputStream()) { out.write(body); }
+            if (conn.getResponseCode() != 200) throw new IOException("HTTP " + conn.getResponseCode());
+        } finally { conn.disconnect(); }
     }
     private void sendWav(byte[] pcm) throws Exception {
         ByteArrayOutputStream wav = new ByteArrayOutputStream();

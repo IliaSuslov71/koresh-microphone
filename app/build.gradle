@@ -1,21 +1,26 @@
-
 plugins {
     id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
 }
-
 android {
     namespace 'com.koresh.microphone'
     compileSdk 35
-
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
     defaultConfig {
-        applicationId 'com.koresh.microphone'
+        applicationId 'com.koresh.microphone.sherpa'
         minSdk 26
         targetSdk 34
-        versionCode 2
-        versionName '2.0'
+        versionCode 21
+        versionName '2.1-sherpa'
     }
 }
-
 dependencies {
     implementation 'com.alphacephei:vosk-android:0.3.47'
+    implementation 'com.xdcobra.sherpa:sherpa-onnx:1.13.2-1'
 }
