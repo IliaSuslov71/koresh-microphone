@@ -35,6 +35,17 @@ jobs:
           mkdir -p app/src/main/assets/model
           cp -R /tmp/vosk/vosk-model-small-ru-0.22/. app/src/main/assets/model/
 
+      - name: Download Russian sherpa-onnx model
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-small-zipformer-ru-2024-09-18.tar.bz2 -o /tmp/sherpa-model.tar.bz2
+          mkdir -p app/src/main/assets
+          tar -xjf /tmp/sherpa-model.tar.bz2 -C app/src/main/assets \
+            sherpa-onnx-small-zipformer-ru-2024-09-18/encoder.int8.onnx \
+            sherpa-onnx-small-zipformer-ru-2024-09-18/decoder.onnx \
+            sherpa-onnx-small-zipformer-ru-2024-09-18/joiner.int8.onnx \
+            sherpa-onnx-small-zipformer-ru-2024-09-18/tokens.txt
+
       - name: Build APK
         run: gradle assembleDebug --no-daemon --info --stacktrace
 
