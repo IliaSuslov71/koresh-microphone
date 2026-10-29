@@ -3,6 +3,9 @@ name: Build Koresh APK
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - koresh-2.1-sherpa
 
 jobs:
   build:
